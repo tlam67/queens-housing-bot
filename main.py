@@ -3,6 +3,17 @@ from bs4 import BeautifulSoup
 import datetime as dt
 from threading import Thread, Event
 import keyboard
+import smtplib
+from email.message import EmailMessage
+from dotenv import load_dotenv
+import os
+import re
+
+load_dotenv()
+SENDER_ADDRESS=os.getenv('SENDER_ADDRESS')
+SENDER_PASSWORD=os.getenv('SENDER_PASSWORD')
+
+email_validator = re.compile('[^@]+@[^@]+\.[^@]+')
 
 class Listing:
   def __init__(self, info) -> None:
@@ -19,7 +30,6 @@ class Listing:
     self.parse(info)
 
   def parse(self, parsed_row):
-    # parsed = BeautifulSoup(tablerow, 'html.parser')     
     data = parsed_row.find_all('td')
     if len(data) != 10:
       print("not length 10, unknown format")
@@ -40,6 +50,18 @@ class Listing:
     info = vars(self)
     for key in info:
       print(f'{key:<15} {info[key]}')
+
+  def getContent(self):
+    content = f'<h1>{self.address}</h1>'
+    content += f'<img width="400" src="{self.img}">'
+    content += f'<table style="border-spacing: 30px 0;">'
+    data = vars(self)
+    for key in data:
+      if key == "img": continue
+      content += "<tr><td>" + key.replace('_', ' ') + "</td>" + "<td>" + data[key] + "</td></tr>"
+
+    content += f'</table>'
+    return content
 
 class ListingManager:
   BASE_API_URL = "https://listingservice.housing.queensu.ca/public/getByFilter?"
@@ -69,9 +91,10 @@ class ListingManager:
     self.date_available = dt.date.today()
     self.show_test = 0
     self.num_items = "all"
-    self.frequency = 15
+    self.frequency = 60
     self.active = False
     self.timer = Event()
+    self.test = False
     self.configure()
     self.current_settings()
 
@@ -136,6 +159,12 @@ class ListingManager:
     return inp
 
   def configure(self):
+    email = ""
+    while not email_validator.match(email):
+      email = input("Enter a valid email to send notifications to: ")
+
+    self.email = email
+
     use_default_settings = True
     inp = None
     while not isinstance(inp, bool):
@@ -194,22 +223,47 @@ class ListingManager:
 
     return url
 
-  def notify(self, listing: Listing):
-    print("new listing:", listing.address)
+  def notify(self, listings):
+    print(f'{len(listings)} new listings!')
+
+    msg = EmailMessage()
+    content = ''
+
+    for listing in listings:
+      content += listing.getContent()
+
+    msg.set_content(f'<!DOCTYPE html><body><div style="display: block; justify-content: center; align-items: center; flex-direction: column;">{content}</div></body></html>', subtype='html')
+    msg['Subject'] = f"New listing(s) on Queen's listings"
+    msg['From'] = SENDER_ADDRESS
+    msg['To'] = self.email
+
+    s = smtplib.SMTP('smtp.gmail.com', 587)
+    s.starttls()
+    s.login(SENDER_ADDRESS, SENDER_PASSWORD)
+    s.send_message(msg)
+    s.quit()
+    print('Email notification sent')
 
   def update_listings(self, string):
     string = string.replace('\\', '')
     sections = string.split('","')
     listing_section = sections[0][2:]
     parsed = BeautifulSoup(listing_section, 'html.parser')
+    new_listings = []
     for row in parsed.find_all('tr'):      
       listing = Listing(row)
       if listing.address not in self.listings:
         # if its being monitored, send notification
         if self.active == True:
-          self.notify(listing)
+          new_listings.append(listing)
         
         self.listings[listing.address] = listing
+      if self.test:
+        new_listings.append(listing)
+        self.test = len(new_listings) < 2
+    if new_listings:
+      self.notify(new_listings)
+    print(f'Last checked at: {dt.datetime.now()}', end='\r')
 
   def query(self):
     response = requests.get(self.buildURL())
@@ -220,12 +274,15 @@ class ListingManager:
     return self
 
   def monitor(self):
-    print("Starting to monitor, press q to exit")
+    print(f'Starting to monitor at {dt.datetime.now()}, press q to exit')
     self.query()
     self.active = True
+    has_tested = False
     while self.active:
       self.query()
-      print(f'Last checked at: {dt.datetime.now()}', end='\r')
+      if not has_tested:
+        self.test = True
+        has_tested = True
       self.timer.wait(self.frequency)
 
   def stop(self):
