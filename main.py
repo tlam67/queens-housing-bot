@@ -95,7 +95,7 @@ class ListingManager:
     self.onsite_laundry = False
     self.landlord_contract_program = False
     self.queens_owned = False
-    self.date_available = dt.date.today()
+    self.date_available = None
     self.show_test = 0
     self.num_items = "all"
     
@@ -116,12 +116,14 @@ class ListingManager:
         inp = input(display + "\nChoose an option (input nothing for default): ")
         try:
           if inp == "":
-            inp = 0
+            inp = 1
             break
           inp = int(inp)
         except ValueError:
           print("Input must be an integer")
-      inp = options[inp]
+      inp -= 1
+      if inp == 0:
+        return ""
     elif type == self.BOOL:
       for option in options:
         display += option
@@ -225,7 +227,7 @@ class ListingManager:
         continue
       
       if settings[key] is not None:
-        url += f'{key}={settings[key]}&'  # concat the settings for filtering
+        url += f'{key}={settings[key]}&'.lower()  # concat the settings for filtering
     
     if url[-1] == '&':
       url = url[:-1]          # remove last character for formatting
@@ -260,7 +262,9 @@ class ListingManager:
     parsed = BeautifulSoup(listing_section, 'html.parser')
 
     new_listings = []
-    for row in parsed.find_all('tr'):      
+    for row in parsed.find_all('tr'): 
+      if row.td.text == "This search returned no listings.": break
+
       listing = Listing(row)
       if listing.address not in self.listings:
         # if its being monitored, send notification
