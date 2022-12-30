@@ -1,19 +1,22 @@
 import requests
 from bs4 import BeautifulSoup
 import datetime as dt
-from threading import Thread, Event
+import threading
 import keyboard
 import smtplib
 from email.message import EmailMessage
 from dotenv import load_dotenv
 import os
 import re
+import logging
 
 load_dotenv()
 SENDER_ADDRESS=os.getenv('SENDER_ADDRESS')
 SENDER_PASSWORD=os.getenv('SENDER_PASSWORD')
 
 email_validator = re.compile('[^@]+@[^@]+\.[^@]+')
+logging.basicConfig(level=logging.INFO)
+
 
 class Listing:
   def __init__(self, info) -> None:
@@ -76,7 +79,7 @@ class ListingManager:
     self.email = None
     self.frequency = 60
     self.active = False
-    self.timer = Event()
+    self.timer = threading.Event()
     self.test = False
 
     # Properties used for URL building/filtering
@@ -216,7 +219,7 @@ class ListingManager:
     info = vars(self)
     for key in info:
       print(f'{key:<30} {info[key]}')
-    print('#' * 50, '\n')
+    print('#' * 50)
 
   def buildURL(self):
     url = self.BASE_API_URL
@@ -235,7 +238,7 @@ class ListingManager:
     return url
 
   def notify(self, listings):
-    print(f'{len(listings)} new listings!')
+    logging.info(f'{len(listings)} new listings!')
 
     msg = EmailMessage()
     content = ''
@@ -253,7 +256,7 @@ class ListingManager:
     s.login(SENDER_ADDRESS, SENDER_PASSWORD)
     s.send_message(msg)
     s.quit()
-    print('Email notification sent')
+    logging.info('Email notification sent')
 
   def update_listings(self, string):
     string = string.replace('\\', '')
@@ -283,18 +286,17 @@ class ListingManager:
       self.notify(new_listings)
 
     # log message
-    print(f'Last checked at: {dt.datetime.now()}', end='\r')
+    logging.info(f'Last checked at: {dt.datetime.now()}')
 
   def query(self):
     response = requests.get(self.buildURL())
     self.update_listings(response.text)
 
   def start(self):
-    Thread(target=self.monitor, args=()).start()
+    threading.Thread(target=self.monitor, args=()).start()
     return self
 
   def monitor(self):
-    print(f'Starting to monitor at {dt.datetime.now()}, press q to exit')
     self.query()
     self.active = True
 
@@ -308,12 +310,17 @@ class ListingManager:
 
   def display_listings(self):
     for address in self.listings:
-      print('\n' + '#' * 100, '\n')
+      logging.info('#' * 100)
       self.listings[address].display()
 
 def main():
+  print('\n' * 3)
+  print('#' * 50)
+  print(' ' * 10, "Queen's Listings Notifications")
+  print('#' * 50)
   listing_manager = ListingManager()
   listing_manager.start()
+  logging.info('\nStarted monitoring, press q to exit\n')
   while True:
     if keyboard.read_key() == "q":
       listing_manager.stop()
