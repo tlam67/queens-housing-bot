@@ -1,9 +1,11 @@
 import requests
 from bs4 import BeautifulSoup
 import datetime as dt
+from threading import Thread, Event
+import keyboard
 
 class Listing:
-  def __init__(self) -> None:
+  def __init__(self, info) -> None:
     self.img = None
     self.address = None
     self.type = None
@@ -14,28 +16,25 @@ class Listing:
     self.rent = None
     self.contact = None
     self.details = None
+    self.parse(info)
 
-  def parse(self, string):
-    string = string.replace('\\', '')
-    sections = string.split('","')
-    listing_section = sections[0][2:]
-    parsed = BeautifulSoup(listing_section, 'html.parser')
-    for row in parsed.find_all('tr'):      
-      data = row.find_all('td')
-      if len(data) != 10:
-        print("not length 10, unknown format")
-        return
-      
-      self.img = row.img['src']
-      self.address = data[1].text
-      self.type = data[2].text
-      self.lease_type = data[3].text
-      self.rooms = data[4].text
-      self.available = data[5].text
-      self.lease_start = data[6].text
-      self.rent = data[7].text
-      self.contact = data[8].text
-      self.details = data[9].a['href']
+  def parse(self, parsed_row):
+    # parsed = BeautifulSoup(tablerow, 'html.parser')     
+    data = parsed_row.find_all('td')
+    if len(data) != 10:
+      print("not length 10, unknown format")
+      return
+    
+    self.img = parsed_row.img['src']
+    self.address = data[1].text
+    self.type = data[2].text
+    self.lease_type = data[3].text
+    self.rooms = data[4].text
+    self.available = data[5].text
+    self.lease_start = data[6].text
+    self.rent = data[7].text
+    self.contact = data[8].text
+    self.details = data[9].a['href']
 
   def display(self):
     info = vars(self)
@@ -50,7 +49,7 @@ class ListingManager:
   INT = "INT"
 
   def __init__(self) -> None:
-    self.listings = None
+    self.listings = {}
     self.email = None
     self.property_type_id = None
     self.lease_type_id = None
@@ -70,11 +69,14 @@ class ListingManager:
     self.date_available = dt.date.today()
     self.show_test = 0
     self.num_items = "all"
-    # self.frequency = 60
+    self.frequency = 15
+    self.active = False
+    self.timer = Event()
     self.configure()
     self.current_settings()
 
   def getInput(self, options, type):
+    print()       # print new line for spacing
     display = ''
     inp = None
     if type == self.STRING:
@@ -117,6 +119,18 @@ class ListingManager:
         except ValueError:
           print("error")
       inp = inp.date()
+    elif type == self.INT:
+      for option in options:
+        display += option
+      while not isinstance(inp, int):
+        inp = input(display + "\nEnter a positive integer: ")
+        try:
+          inp = int(inp)
+          if inp <= 0:
+            print("Input must be a positive integer")
+            inp = "error"
+        except ValueError:
+          print("enter an integer")
     else:
       print("unrecognized type")
     return inp
@@ -154,6 +168,7 @@ class ListingManager:
       self.date_available = self.getInput(["Available After"], self.DATE)
       self.show_test = 0
       self.num_items = "all"
+      self.frequency = self.getInput(["Polling Frequency (60 seconds or more recommended)"], self.INT)
 
   def current_settings(self):
     print('#' * 50)
@@ -162,14 +177,73 @@ class ListingManager:
     info = vars(self)
     for key in info:
       print(f'{key:<30} {info[key]}')
+    print('#' * 50, '\n')
 
-response = requests.get('https://listingservice.housing.queensu.ca/public/getByFilter?property_type_id=&lease_type_id=&number_of_rooms=&shared_accommodation=false&water_included=false&heat_included=false&electricity_included=false&furnished=false&parking_available=false&air_conditioning=false&accessibility_features=false&laundry_hookup=false&onsite_laundry=false&landlord_contract_program=false&queens_owned=false&date_available=&show_test=0&num_items=10')
+  def buildURL(self):
+    url = self.BASE_API_URL
+    settings = vars(self)
+    for key in settings:
+      if key == "listings" or key == "email":     # skip the non-url related fields
+        continue
+      
+      if settings[key] is not None:
+        url += f'{key}={settings[key]}&'          # concat the settings 
+    
+    if url[-1] == '&':
+      url = url[:-1]
 
-listing = Listing()
+    return url
 
-listing.parse(response.text)
-# listing.display()
+  def notify(self, listing: Listing):
+    print("new listing:", listing.address)
 
-listing_manager = ListingManager()
-# listing_manager.configure()
-# listing_manager.current_settings()
+  def update_listings(self, string):
+    string = string.replace('\\', '')
+    sections = string.split('","')
+    listing_section = sections[0][2:]
+    parsed = BeautifulSoup(listing_section, 'html.parser')
+    for row in parsed.find_all('tr'):      
+      listing = Listing(row)
+      if listing.address not in self.listings:
+        # if its being monitored, send notification
+        if self.active == True:
+          self.notify(listing)
+        
+        self.listings[listing.address] = listing
+
+  def query(self):
+    response = requests.get(self.buildURL())
+    self.update_listings(response.text)
+
+  def start(self):
+    Thread(target=self.monitor, args=()).start()
+    return self
+
+  def monitor(self):
+    print("Starting to monitor, press q to exit")
+    self.query()
+    self.active = True
+    while self.active:
+      self.query()
+      print(f'Last checked at: {dt.datetime.now()}', end='\r')
+      self.timer.wait(self.frequency)
+
+  def stop(self):
+    self.active = False
+    self.timer.set()
+
+  def display_listings(self):
+    for address in self.listings:
+      print('\n' + '#' * 100, '\n')
+      self.listings[address].display()
+
+def main():
+  listing_manager = ListingManager()
+  listing_manager.start()
+  while True:
+    if keyboard.read_key() == "q":
+      listing_manager.stop()
+      break
+
+if __name__ == '__main__':
+  main()
