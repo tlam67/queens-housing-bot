@@ -71,8 +71,15 @@ class ListingManager:
   INT = "INT"
 
   def __init__(self) -> None:
+    # Properties for the class
     self.listings = {}
     self.email = None
+    self.frequency = 60
+    self.active = False
+    self.timer = Event()
+    self.test = False
+
+    # Properties used for URL building/filtering
     self.property_type_id = None
     self.lease_type_id = None
     self.number_of_rooms = None
@@ -91,10 +98,8 @@ class ListingManager:
     self.date_available = dt.date.today()
     self.show_test = 0
     self.num_items = "all"
-    self.frequency = 60
-    self.active = False
-    self.timer = Event()
-    self.test = False
+    
+    # Initialize settings
     self.configure()
     self.current_settings()
 
@@ -165,6 +170,9 @@ class ListingManager:
 
     self.email = email
 
+    self.test = self.getInput(["Send test email?"], self.BOOL)
+    print() # newline for formatting
+
     use_default_settings = True
     inp = None
     while not isinstance(inp, bool):
@@ -211,15 +219,16 @@ class ListingManager:
   def buildURL(self):
     url = self.BASE_API_URL
     settings = vars(self)
+    unrelated = ["listings", "email", "active", "test", "timer", "frequency"]
     for key in settings:
-      if key == "listings" or key == "email":     # skip the non-url related fields
+      if key in unrelated:     # skip the non-url related fields
         continue
       
       if settings[key] is not None:
-        url += f'{key}={settings[key]}&'          # concat the settings 
+        url += f'{key}={settings[key]}&'  # concat the settings for filtering
     
     if url[-1] == '&':
-      url = url[:-1]
+      url = url[:-1]          # remove last character for formatting
 
     return url
 
@@ -249,6 +258,7 @@ class ListingManager:
     sections = string.split('","')
     listing_section = sections[0][2:]
     parsed = BeautifulSoup(listing_section, 'html.parser')
+
     new_listings = []
     for row in parsed.find_all('tr'):      
       listing = Listing(row)
@@ -258,11 +268,17 @@ class ListingManager:
           new_listings.append(listing)
         
         self.listings[listing.address] = listing
+      
+      # for testing purposes
       if self.test:
         new_listings.append(listing)
-        self.test = len(new_listings) < 2
+        self.test = False
+      
+    # check for new listings and notify
     if new_listings:
       self.notify(new_listings)
+
+    # log message
     print(f'Last checked at: {dt.datetime.now()}', end='\r')
 
   def query(self):
@@ -277,12 +293,9 @@ class ListingManager:
     print(f'Starting to monitor at {dt.datetime.now()}, press q to exit')
     self.query()
     self.active = True
-    has_tested = False
+
     while self.active:
       self.query()
-      if not has_tested:
-        self.test = True
-        has_tested = True
       self.timer.wait(self.frequency)
 
   def stop(self):
